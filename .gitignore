@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Checkpoints / large binaries (host externally, see README)
+*.ckpt
+*.pt
+*.pth
+
+# Logs / run artifacts
+*.log
+logs/
+local_log/
+outputs/
+.hydra/
+slurm_log/
+events.out.tfevents.*
+
+# Experiment outputs
+results/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
