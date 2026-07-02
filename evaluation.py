@@ -7,6 +7,7 @@ from sklearn.metrics import roc_curve, auc
 from preprocessing import (
     gauss_noise_padding,
     softrank_preprocessing_correct,
+    whiten_blocks,
 )
 
 
@@ -35,6 +36,15 @@ def estimate_mi_xy(X, Y, model, max_dim, softrank_reg: float = 1e-3, gauss_copul
     sample_xy = softrank_preprocessing_correct(
         sample_xy, regularization_strength=softrank_reg, gauss_copula=gauss_copula
     ).to(device)
+
+    # Match the model's training-time preprocessing: if it was trained with per-side
+    # ZCA whitening, whiten the eval data too (stamped as model._whiten by
+    # LightningWrapper.__init__ / infer.load_ckpt). Otherwise in-training BMI/sync
+    # numbers under-estimate badly due to a train/eval preprocessing mismatch.
+    _whiten = str(getattr(model, "_whiten", "none"))
+    if _whiten == "eig":
+        _eps = float(getattr(model, "_whiten_eps", 1e-3))
+        sample_xy = whiten_blocks(sample_xy, max_dim=max_dim, eps_floor=_eps)
 
     with torch.no_grad():
         mi_est = model(sample_xy)
@@ -132,6 +142,20 @@ def evaluate_bmi(
         'spiral-normal_cdf-multinormal-sparse-3-3-2-2.0', 'spiral-normal_cdf-multinormal-sparse-5-5-2-2.0',
         'asinh-student-identity-2-2-1', 'asinh-student-identity-3-3-2', 'asinh-student-identity-5-5-2'
     ]
+
+    # Keep only tasks the model can actually ingest: native input dim <= max_dim.
+    # For max_dim >= 5 every task passes (byte-identical to before); for the 3d
+    # model this drops the dim-4/5 tasks so estimate_mi_xy never raises mid-eval
+    # (which would otherwise crash training at the first validation).
+    def _native_dim(task_name):
+        xp = os.path.join(data_root, task_name, "X_seed_42.npz")
+        return int(np.load(xp)["X"].shape[1])
+
+    _full = list(chosen_task_list)
+    chosen_task_list = [t for t in chosen_task_list if _native_dim(t) <= max_dim]
+    if len(chosen_task_list) < len(_full):
+        print(f"[BMI eval] max_dim={max_dim}: using {len(chosen_task_list)}/{len(_full)} "
+              f"tasks (native dim <= {max_dim}); dropped {len(_full) - len(chosen_task_list)}")
 
     if isinstance(sample_sizes, int):
         sample_sizes = [sample_sizes]

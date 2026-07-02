@@ -168,6 +168,58 @@ def softrank_preprocessing_correct_gpu(
 
 
 # ============================================================
+# Per-side whitening — second preprocessing layer (config: whiten=eig)
+# ============================================================
+
+def whiten_blocks(data, max_dim, eps_floor=1e-3):
+    """
+    Decorrelate the X block and the Y block SEPARATELY, per task (ZCA whitening).
+
+    ``data`` : [b, n, 2*max_dim], X = data[..., :max_dim], Y = data[..., max_dim:2*max_dim],
+    already soft-rank Gaussian-copula preprocessed (so marginals are ~N(0,1)).
+
+    Each block Z is replaced by  (Z - mean) @ W,  with  W = V diag(s^{-1/2}) Vᵀ
+    built from THAT task's own empirical covariance and eigenvalues floored at
+    ``s = max(lambda, eps_floor * lambda_max)``. Consequences:
+
+      * W is symmetric positive-definite -> an INVERTIBLE linear map on each side,
+        so I(X;Y) is preserved EXACTLY (MI is invariant under a separate bijection
+        applied to X and to Y).
+      * cond(W) <= (1/eps_floor)^{1/2}; with eps_floor=1e-3 that is ~32, so the map
+        is numerically well-conditioned and reversible even on (near-)rank-deficient
+        tasks -- no eigenvalue blow-up, no precision loss.
+
+    Applied identically at training and inference time (see ``train.py`` and
+    ``infer.py``); the transform must match on both sides. Done per block:
+    whitening the *stacked* [X,Y] jointly would mix the two sides and destroy the
+    cross-dependence (MI -> ~0).
+    """
+    if max_dim <= 0:
+        return data
+    orig_dtype = data.dtype
+    n = data.shape[1]
+
+    def _whiten(Z):                                       # Z: [b, n, m]  (float64)
+        m = Z.shape[-1]
+        Zc = Z - Z.mean(dim=1, keepdim=True)
+        cov = torch.einsum("bni,bnj->bij", Zc, Zc) / max(n - 1, 1)   # [b, m, m]
+        cov = 0.5 * (cov + cov.transpose(-1, -2))
+        cov = cov + 1e-9 * torch.eye(m, dtype=cov.dtype, device=cov.device)
+        evals, evecs = torch.linalg.eigh(cov)                        # ascending
+        lam_max = evals[..., -1:].clamp_min(1e-12)
+        evals = torch.maximum(evals, eps_floor * lam_max)            # floor cond
+        inv_sqrt = evals.rsqrt()
+        W = (evecs * inv_sqrt.unsqueeze(-2)) @ evecs.transpose(-1, -2)
+        return torch.einsum("bni,bij->bnj", Zc, W)
+
+    work = data.double()
+    out = work.clone()
+    out[..., :max_dim] = _whiten(work[..., :max_dim])
+    out[..., max_dim:2 * max_dim] = _whiten(work[..., max_dim:2 * max_dim])
+    return out.to(orig_dtype)
+
+
+# ============================================================
 # Gaussian-noise padding to a fixed input dimension
 # ============================================================
 

@@ -205,6 +205,12 @@ def eval_sync_infoatlas(model, max_dim, softrank_reg, tasks, sample_size, repeat
     results = {}
     for task in tasks:
         tn = task["task_name"]
+        # Skip tasks whose native dimension exceeds this checkpoint's max_dim
+        # (e.g. the 5d tasks on a max_dim=3 model), which InfoAtlas cannot ingest.
+        if task["dim"] > max_dim:
+            results[tn] = {"gt_mi": task["gt_mi"], "mean_est": float("nan")}
+            print(f"  [InfoAtlas] {tn:<40s} skipped (dim {task['dim']} > max_dim {max_dim})")
+            continue
         estimates = []
         for start_idx in range(0, repeats, parallel_bs):
             batch_seeds = seeds[start_idx:start_idx + parallel_bs]

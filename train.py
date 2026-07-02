@@ -29,6 +29,8 @@ from infonet.encoder import Encoder
 from infonet.infonet import InfoNet
 from infonet.query import Query_Gen_transformer
 
+from preprocessing import whiten_blocks
+
 from torch.optim import Adam
 import lightning
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -86,6 +88,10 @@ class InfoNetDataset(torch.utils.data.Dataset):
         self.seq_len = cfg.seq_len
         self.dim = cfg.input_dim_x
         self.softrank_reg = cfg.softrank_reg
+        # Optional per-side whitening (config: whiten=eig). Applied AFTER the
+        # soft-rank copula transform, so training preprocessing matches inference.
+        self.whiten = str(cfg.get("whiten", "none"))
+        self.whiten_eps = float(cfg.get("whiten_eps", 1e-3))
         self.device = device
         self.max_retry = max_retry
         print(f"init data set with device {self.device}, and total epoch {total_epoch}")
@@ -112,6 +118,8 @@ class InfoNetDataset(torch.utils.data.Dataset):
                 device=self.device,
             )
             if self._is_valid_tensor(res):
+                if self.whiten == "eig":
+                    res = whiten_blocks(res, max_dim=self.dim, eps_floor=self.whiten_eps)
                 return res
 
         raise RuntimeError(
@@ -129,10 +137,10 @@ class LightningWrapper(lightning.LightningModule):
             input_dim_y=cfg.input_dim_y,
             latent_num=cfg.latent_num,
             latent_dim=cfg.latent_dim,
-            cross_attn_heads=8,
-            self_attn_heads=16,
-            num_self_attn_per_block=8,
-            num_self_attn_blocks=2,
+            cross_attn_heads=int(cfg.get("cross_attn_heads", 8)),
+            self_attn_heads=int(cfg.get("self_attn_heads", 16)),
+            num_self_attn_per_block=int(cfg.get("num_self_attn_per_block", 8)),
+            num_self_attn_blocks=int(cfg.get("num_self_attn_blocks", 2)),
         )
 
         self.decoder = Decoder(
@@ -166,6 +174,11 @@ class LightningWrapper(lightning.LightningModule):
             targetnet_hiddim=cfg.targetnet_hiddim,
             **hypogen_kwargs,
         )
+
+        # Stamp the preprocessing flags onto the model so the validation loop
+        # (evaluate_bmi) applies the SAME whitening the data is trained with.
+        self.model._whiten = str(cfg.get("whiten", "none"))
+        self.model._whiten_eps = float(cfg.get("whiten_eps", 1e-3))
 
     def forward(self, x):
         return self.model(x.squeeze(1), early_sup=False)

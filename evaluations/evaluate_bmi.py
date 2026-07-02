@@ -130,6 +130,15 @@ def evaluate_bmi_infoatlas(
     for task_name, task_data in data_cache.items():
         gt_mi = task_data["gt_mi"]
         samples = task_data["samples"]
+
+        # Skip tasks whose native dimension exceeds this checkpoint's max_dim
+        # (e.g. dim-5 tasks on a max_dim=3 model), which InfoAtlas cannot ingest.
+        task_dim = samples[0][0].shape[1] if samples else 0
+        if task_dim > max_dim:
+            results_dict[task_name] = {"gt_mi": gt_mi, "mean_est": float("nan")}
+            print(f"  [InfoAtlas] {task_name:<55s} skipped (dim {task_dim} > max_dim {max_dim})")
+            continue
+
         task_estimates = []
 
         for start_idx in range(0, len(samples), parallel_bs):

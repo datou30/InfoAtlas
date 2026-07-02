@@ -20,7 +20,7 @@ num_per_epoch: 2000
 gpu_card: 8
 num_nodes: 1
 
-name: 1-8d-hylap-newdata
+name: infoatlas-d8
 version: d${input_dim_x}-softrank1e-3
 log_dir: logs
 

@@ -12,6 +12,7 @@ from preprocessing import (
     gauss_noise_padding_gpu,
     softrank_preprocessing_correct,
     softrank_preprocessing_correct_gpu,
+    whiten_blocks,
 )
 from infonet.decoder import Decoder
 from infonet.encoder import Encoder
@@ -41,10 +42,10 @@ class InferLightningWrapper(lightning.LightningModule):
             input_dim_y=input_dim_y,
             latent_num=latent_num,
             latent_dim=latent_dim,
-            cross_attn_heads=8,
-            self_attn_heads=16,
-            num_self_attn_per_block=8,
-            num_self_attn_blocks=2,
+            cross_attn_heads=int(cfg.get("cross_attn_heads", 8)),
+            self_attn_heads=int(cfg.get("self_attn_heads", 16)),
+            num_self_attn_per_block=int(cfg.get("num_self_attn_per_block", 8)),
+            num_self_attn_blocks=int(cfg.get("num_self_attn_blocks", 2)),
         )
 
         self.decoder = Decoder(
@@ -131,7 +132,7 @@ def load_ckpt(
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"ckpt_path not found: {ckpt_path}")
 
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
     if "state_dict" not in ckpt:
         raise KeyError(f"'state_dict' not found in checkpoint: {ckpt_path}")
@@ -157,9 +158,30 @@ def load_ckpt(
     module = InferLightningWrapper(cfg)
     missing, unexpected = module.load_state_dict(ckpt["state_dict"], strict=False)
 
+    # Unexpected keys (present in the ckpt, absent from the model) are harmless
+    # — the model simply ignores them. Missing keys, however, mean the model has
+    # parameters the checkpoint does not, so those would stay randomly initialized;
+    # that silently returns a wrong model, so we refuse to load.
+    if unexpected:
+        print(f"[load_ckpt] note: {len(unexpected)} unexpected key(s) in the checkpoint "
+              f"were ignored (e.g. {unexpected[:5]}).")
+    if missing:
+        raise RuntimeError(
+            f"load_ckpt: {len(missing)} model parameter(s) are missing from the checkpoint "
+            f"(e.g. {missing[:5]}). The embedded config does not match the checkpoint's weights, "
+            f"so part of the model would be left randomly initialized. Refusing to return a "
+            f"partially-initialized model."
+        )
+
     module = module.to(device)
     module.eval()
     module.model.eval()
+
+    # Stamp the preprocessing flags onto the model so EVERY eval path
+    # (estimate_mi_batch / _gpu and everything that calls them) auto-applies the
+    # SAME whitening the model was trained with. Default "none" -> unchanged.
+    module.model._whiten = str(cfg.get("whiten", "none"))
+    module.model._whiten_eps = float(cfg.get("whiten_eps", 1e-3))
 
     if verbose:
         print(f"[load_ckpt] ckpt_path = {ckpt_path}")
@@ -197,6 +219,8 @@ def estimate_mi_batch(
     softrank_reg: float = 1e-3,
     gauss_copula: bool = True,
     device: Optional[Union[str, torch.device]] = None,
+    whiten: Optional[str] = None,
+    whiten_eps: Optional[float] = None,
 ) -> torch.Tensor:
     """
     Batch estimate mutual information.
@@ -204,6 +228,8 @@ def estimate_mi_batch(
     Args:
         X: [B, N, d] or [N, d]
         Y: [B, N, d] or [N, d]
+        whiten: per-side whitening to match training ("none"/"eig"). If None, read
+            from the model (stamped by load_ckpt from the ckpt's cfg).
 
     Returns:
         mi_est: [B]
@@ -237,6 +263,11 @@ def estimate_mi_batch(
         regularization_strength=softrank_reg,
         gauss_copula=gauss_copula,
     ).to(device)
+
+    _whiten = getattr(model, "_whiten", "none") if whiten is None else whiten
+    if _whiten == "eig":
+        _eps = getattr(model, "_whiten_eps", 1e-3) if whiten_eps is None else whiten_eps
+        sample_xy = whiten_blocks(sample_xy, max_dim=max_dim, eps_floor=float(_eps))
 
     model.eval()
     with torch.no_grad():
@@ -378,6 +409,8 @@ def estimate_mi_batch_gpu(
     softrank_reg: float = 1e-3,
     gauss_copula: bool = True,
     device: Optional[Union[str, torch.device]] = None,
+    whiten: Optional[str] = None,
+    whiten_eps: Optional[float] = None,
 ) -> torch.Tensor:
     """
     GPU-only counterpart to estimate_mi_batch.
@@ -420,6 +453,11 @@ def estimate_mi_batch_gpu(
         regularization_strength=softrank_reg,
         gauss_copula=gauss_copula,
     )
+
+    _whiten = getattr(model, "_whiten", "none") if whiten is None else whiten
+    if _whiten == "eig":
+        _eps = getattr(model, "_whiten_eps", 1e-3) if whiten_eps is None else whiten_eps
+        sample_xy = whiten_blocks(sample_xy, max_dim=max_dim, eps_floor=float(_eps))
 
     model.eval()
     with torch.no_grad():

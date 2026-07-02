@@ -130,6 +130,11 @@ def eval_discrete_infoatlas(model, max_dim, softrank_reg, tasks, sample_size, re
     results = {}
     for task in tasks:
         tn = task["task_name"]
+        # Skip tasks whose native dimension exceeds this checkpoint's max_dim.
+        if task["dim"] > max_dim:
+            results[tn] = {"gt_mi": task["gt_mi"], "est": float("nan")}
+            print(f"  [InfoAtlas] {tn:<36s} skipped (dim {task['dim']} > max_dim {max_dim})")
+            continue
         ests = []
         for start_idx in range(0, repeats, parallel_bs):
             batch_seeds = seeds[start_idx:start_idx + parallel_bs]

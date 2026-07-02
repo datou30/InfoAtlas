@@ -63,17 +63,25 @@ toolkit matches your PyTorch build.
 
 ## 📦 Pretrained Checkpoints
 
-We release two `max_dim = 5` checkpoints (optimizer state stripped for a small download). Both are
-loaded the same way; the config is embedded in the file, so no separate YAML is required.
+We release checkpoints for several maximum input dimensions (optimizer state stripped for a small
+download). All are loaded the same way; the config is embedded in each file, so no separate YAML is
+required.
 
 | Checkpoint | Max dim | Steps | Notes |
 |:-----------|:-------:|:-----:|:------|
+| `infoatlas_maxdim3_step175000.ckpt` | 3 | 175,000 | Most accurate on low-dimensional inputs (`d ≤ 3`), including strong / high-MI dependence. |
 | `infoatlas_maxdim5_step275000.ckpt` | 5 | 275,000 | Robust general-purpose model — recommended default. |
 | `infoatlas_maxdim5_step432500.ckpt` | 5 | 432,500 | Stronger in high-MI regimes, but may overestimate on (near-)independent data. |
+| `infoatlas_maxdim10_step097500.ckpt` | 10 | 97,500 | Handles inputs up to `d = 10` natively. |
 
-**Download (Google Drive):** [zhengyanghu_research / InfoAtlas_ckpts](https://drive.google.com/open?id=1Syjm-Rprnx_dYYOHLEL1dZxHplcLKUsM)
+**Choosing a checkpoint.** Pick the smallest `max_dim` that is ≥ your data dimension: the `max_dim = 3`
+model is the most accurate on `d ≤ 3` inputs, `max_dim = 5` is the general-purpose default, and
+`max_dim = 10` covers up to 10-dimensional inputs. For higher dimensions, use k-sliced MI
+(`compute_ksmi_mean`) with any checkpoint. The `max_dim = 3` and `max_dim = 10` models apply an extra
+whitening step, which is stored in the checkpoint and handled automatically (see
+[Preprocessing](#-preprocessing-must-match-training)).
 
-> `max_dim = 8` and `max_dim = 10` checkpoints will be released soon.
+**Download (Google Drive):** [InfoAtlas checkpoints](https://drive.google.com/open?id=1Syjm-Rprnx_dYYOHLEL1dZxHplcLKUsM)
 
 ```python
 from infer import load_ckpt
@@ -158,15 +166,16 @@ dimension with random slices and average. InfoAtlas is particularly strong here:
 from infer import compute_ksmi_mean
 mi = compute_ksmi_mean(
     X, Y,                       # [N, dx], [N, dy] with dx, dy arbitrarily large
-    projection_dim=5,           # slice down to 5-D (matches max_dim)
+    projection_dim=5,           # slice down to <= max_dim (5 here; use <= 3 for the max_dim=3 model)
     model=model, proj_num=64, batchsize=32,
     max_dim=cfg.input_dim_x, softrank_reg=cfg.softrank_reg,
     normalize_input=True,
 )
 ```
 
-> **Input rules.** For `estimate_mi` / `estimate_mi_batch`, `d` must be `≤ max_dim` (= 5). For larger
-> `d`, use `compute_ksmi_mean`. MI is returned in nats.
+> **Input rules.** For `estimate_mi` / `estimate_mi_batch`, `d` must be `≤ max_dim` (3, 5, or 10
+> depending on the checkpoint — read it from `cfg.input_dim_x`). For larger `d`, use
+> `compute_ksmi_mean`. MI is returned in nats.
 
 ---
 
@@ -231,9 +240,27 @@ python -m evaluations.evaluate_bmi --ckpt_path infoatlas_maxdim5_step275000.ckpt
 </p>
 
 Paired samples are mapped through a **soft-rank Gaussian-copula** transform (`preprocessing.py`),
-encoded by a **Perceiver-style** cross/self-attention encoder, and a **hypernetwork** generates the
-weights of a critic network whose output the decoder turns into an MI estimate — all in one forward
-pass. The result is a single pretrained model that estimates dependence zero-shot.
+followed by an **optional per-side whitening** step, and then encoded by a **Perceiver-style**
+cross/self-attention encoder; a **hypernetwork** generates the weights of a critic network whose
+output the decoder turns into an MI estimate — all in one forward pass. The result is a single
+pretrained model that estimates dependence zero-shot.
+
+## 🔧 Preprocessing must match training
+
+InfoAtlas is trained on inputs that pass through a fixed preprocessing pipeline, and it expects the
+**same** pipeline at inference — matching it matters for accuracy. Two things line up with the
+checkpoint you load:
+
+- **Soft-rank strength.** Use the same soft-rank regularization the model was trained with. It is
+  stored in the checkpoint as `cfg.softrank_reg`; passing `softrank_reg=cfg.softrank_reg` (as in the
+  examples above) keeps you matched.
+- **Whitening.** Some checkpoints apply an extra per-side whitening step (on for `max_dim = 3` and
+  `max_dim = 10`, off for `max_dim = 5`). This setting is stored in the checkpoint too, and the
+  estimation functions apply it automatically after `load_ckpt` — you do not need to do anything.
+
+In short: load with `load_ckpt`, then pass `max_dim=cfg.input_dim_x` and
+`softrank_reg=cfg.softrank_reg`, and the preprocessing will match what the model saw during training.
+Using different preprocessing (e.g. a mismatched soft-rank strength) can noticeably bias the estimate.
 
 ---
 
@@ -242,9 +269,9 @@ pass. The result is a single pretrained model that estimates dependence zero-sho
 ```
 InfoAtlas/
 ├── infer.py              # Estimation API: load_ckpt, estimate_mi[_batch], compute_ksmi_mean (+ _gpu)
-├── preprocessing.py      # Soft-rank copula transform + noise padding
+├── preprocessing.py      # Soft-rank copula transform + noise padding + optional per-side whitening
 ├── evaluation.py         # Validation utilities (independence testing, sliced MI)
-├── clean_ckpt.py         # Strip optimizer state from a checkpoint
+├── clean_ckpt.py         # Strip optimizer state + reduce embedded config for release
 ├── train.py              # Model definition + training loop (Lightning + Hydra)
 ├── config/               # Hydra configs (default_5d.yaml, ...)
 ├── infonet/              # Model: encoder / decoder / query generator / hypernetwork
