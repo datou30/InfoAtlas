@@ -70,8 +70,7 @@ required.
 | Checkpoint | Max dim | Steps | Notes |
 |:-----------|:-------:|:-----:|:------|
 | `infoatlas_maxdim3_step175000.ckpt` | 3 | 175,000 | Most accurate on low-dimensional inputs (`d ≤ 3`), including strong / high-MI dependence. |
-| `infoatlas_maxdim5_step275000.ckpt` | 5 | 275,000 | Robust general-purpose model — recommended default. |
-| `infoatlas_maxdim5_step432500.ckpt` | 5 | 432,500 | Stronger in high-MI regimes, but may overestimate on (near-)independent data. |
+| `infoatlas_maxdim5_step432500.ckpt` | 5 | 432,500 | Robust general-purpose model — recommended default for `d ≤ 5`. |
 | `infoatlas_maxdim10_step097500.ckpt` | 10 | 97,500 | Handles inputs up to `d = 10` natively. |
 
 **Choosing a checkpoint.** Pick the smallest `max_dim` that is ≥ your data dimension: the `max_dim = 3`
@@ -85,7 +84,7 @@ whitening step, which is stored in the checkpoint and handled automatically (see
 
 ```python
 from infer import load_ckpt
-_, model, cfg, device = load_ckpt("infoatlas_maxdim5_step275000.ckpt")  # cfg is read from the ckpt
+_, model, cfg, device = load_ckpt("infoatlas_maxdim5_step432500.ckpt")  # cfg is read from the ckpt
 ```
 
 ---
@@ -98,7 +97,7 @@ Estimate mutual information between two variables in a few lines:
 import numpy as np
 from infer import load_ckpt, estimate_mi
 
-_, model, cfg, device = load_ckpt("infoatlas_maxdim5_step275000.ckpt")
+_, model, cfg, device = load_ckpt("infoatlas_maxdim5_step432500.ckpt")
 
 # X, Y: [N, d] arrays (numpy or torch), N samples, d <= 5 dimensions
 X = np.random.randn(2000, 3)
@@ -144,7 +143,7 @@ throughput.
 
 ```python
 # Load once
-module, model, cfg, device = load_ckpt("infoatlas_maxdim5_step275000.ckpt", device="cuda")
+module, model, cfg, device = load_ckpt("infoatlas_maxdim5_step432500.ckpt", device="cuda")
 ```
 
 ### Batch of pairs (recommended)
@@ -191,31 +190,31 @@ The checkpoint carries its own config, so `--cfg_path` is optional.
 
 **Synthetic MI — continuous (Beta / Gamma / Bernoulli / Poisson):**
 ```bash
-python -m evaluations.evaluate_sync --ckpt_path infoatlas_maxdim5_step275000.ckpt --output_dir results/sync
+python -m evaluations.evaluate_sync --ckpt_path infoatlas_maxdim5_step432500.ckpt --output_dir results/sync
 ```
 
 **Synthetic MI — discrete (categorical):**
 ```bash
-python -m evaluations.evaluate_sync_discrete --ckpt_path infoatlas_maxdim5_step275000.ckpt --output_dir results/sync_discrete
+python -m evaluations.evaluate_sync_discrete --ckpt_path infoatlas_maxdim5_step432500.ckpt --output_dir results/sync_discrete
 ```
 
 **Independence testing (ROC-AUC):**
 ```bash
-python -m evaluations.evaluate_independence --ckpt_path infoatlas_maxdim5_step275000.ckpt \
+python -m evaluations.evaluate_independence --ckpt_path infoatlas_maxdim5_step432500.ckpt \
     --test_methods test2 --dims 128 --num_test 30 --proj_num 64
 ```
 `--test_methods` accepts `test1` (sum projection), `test2` (partial projection), `test3` (additive noise).
 
 **CLIP sliced MI:**
 ```bash
-python -m evaluations.evaluate_clip --ckpt_path infoatlas_maxdim5_step275000.ckpt \
+python -m evaluations.evaluate_clip --ckpt_path infoatlas_maxdim5_step432500.ckpt \
     --data_path path/to/embeddings.npz --sample_num 5000 --proj_num 25 --num_repeats 20
 ```
 The `.npz` should contain `image_embeddings` and `text_embeddings`.
 
 **Point tracking (trajectory dependence):**
 ```bash
-python -m evaluations.evaluate_2dtrack --ckpt_path infoatlas_maxdim5_step275000.ckpt \
+python -m evaluations.evaluate_2dtrack --ckpt_path infoatlas_maxdim5_step432500.ckpt \
     --data_root path/to/point_odyssey/val --video_configs "ani_s:2000,2100" --output_dir results/track
 ```
 Measures dependence between motion trajectories; the same pipeline applies to 3-D tracks. The
@@ -225,7 +224,7 @@ source (or substitute your own trajectories) and point `--data_root` at it.
 **BMI benchmark** (`evaluate_bmi.py`) additionally requires the [`bmi`](https://github.com/cbg-ethz/bmi)
 package, which synthesizes its tasks on the fly:
 ```bash
-python -m evaluations.evaluate_bmi --ckpt_path infoatlas_maxdim5_step275000.ckpt --sample_size 100 --repeats 10
+python -m evaluations.evaluate_bmi --ckpt_path infoatlas_maxdim5_step432500.ckpt --sample_size 100 --repeats 10
 ```
 
 > Run `python -m evaluations.<script> --help` for the full flag list of each script. Some scripts
